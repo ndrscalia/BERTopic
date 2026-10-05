@@ -759,8 +759,13 @@ class BERTopic:
         # Add missing topics (topics that were originally created but are now missing)
         if self.topic_representations_:
             missing_topics = set(self.topic_representations_.keys()).difference(set(updated_topics))
-            for missing_topic in missing_topics:
-                documents.loc[len(documents), :] = [" ", len(documents), missing_topic]
+            if missing_topics:
+                base_len = len(documents)
+                missing_rows = [
+                    [" ", base_len + offset, missing_topic]
+                    for offset, missing_topic in enumerate(missing_topics)
+                ]
+                documents = pd.concat([documents, pd.DataFrame(missing_rows, columns=documents.columns)], ignore_index=True,)
         else:
             missing_topics = {}
 
@@ -1126,18 +1131,11 @@ class BERTopic:
 
         bow = self.vectorizer_model.transform(clean_documents)
 
-        # Extract clusters
-        hier_topics = pd.DataFrame(
-            columns=[
-                "Parent_ID",
-                "Parent_Name",
-                "Topics",
-                "Child_Left_ID",
-                "Child_Left_Name",
-                "Child_Right_ID",
-                "Child_Right_Name",
-            ]
-        )
+        # Initialize to accumulate rows
+        # and building the hier_topics df at once
+        # outside the for loop
+        hier_topics_rows_list: list[dict] = []
+
         for index in tqdm(range(len(Z))):
             # Find clustered documents
             clusters = sch.fcluster(Z, t=Z[index][2], criterion="distance") - self._outliers
@@ -1171,7 +1169,7 @@ class BERTopic:
             if Z_id - nr_clusters < 0:
                 child_left_name = "_".join([x[0] for x in self.get_topic(Z_id)][:5])
             else:
-                child_left_name = hier_topics.iloc[int(child_left_id)].Parent_Name
+                child_left_name = hier_topics_rows_list[int(child_left_id)]["Parent_Name"]
 
             # Extract child's name and ID
             Z_id = Z[index][1]
@@ -1180,19 +1178,22 @@ class BERTopic:
             if Z_id - nr_clusters < 0:
                 child_right_name = "_".join([x[0] for x in self.get_topic(Z_id)][:5])
             else:
-                child_right_name = hier_topics.iloc[int(child_right_id)].Parent_Name
+                child_right_name = hier_topics_rows_list[int(child_right_id)]["Parent_Name"]
 
-            # Save results
-            hier_topics.loc[len(hier_topics), :] = [
-                parent_id,
-                parent_name,
-                clustered_topics,
-                int(Z[index][0]),
-                child_left_name,
-                int(Z[index][1]),
-                child_right_name,
-            ]
+            # Save results in the list
+            row_dict = {
+                    "Parent_ID": parent_id,
+                    "Parent_Name": parent_name,
+                    "Topics": clustered_topics,
+                    "Child_Left_ID": int(Z[index][0]),
+                    "Child_Left_Name": child_left_name,
+                    "Child_Right_ID": int(Z[index][1]),
+                    "Child_Right_Name": child_right_name,
+                    }
 
+            hier_topics_rows_list.append(row_dict)
+
+        hier_topics = pd.DataFrame(hier_topics_rows_list)
         hier_topics["Distance"] = Z[:, 2]
         hier_topics = hier_topics.sort_values("Parent_ID", ascending=False)
         hier_topics[["Parent_ID", "Child_Left_ID", "Child_Right_ID"]] = hier_topics[
